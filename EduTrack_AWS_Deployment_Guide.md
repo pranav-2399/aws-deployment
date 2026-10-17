@@ -3,7 +3,7 @@
 
 This guide explains how to adapt the existing [EduTrack repository](https://github.com/Zawalid/EduTrack) for an AWS project that demonstrates relational and NoSQL databases, availability, monitoring, security, and cost management.
 
-> **Important:** EduTrack is someone else's project. Treat it as an unfamiliar codebase. First get it running locally, inspect its configuration, and then adapt it incrementally. The commands and configurations below are examples; confirm service names, versions, environment variables, and routes against the actual repository before using them.
+> **Important:** EduTrack is someone else's project. Inspect its configuration and adapt it incrementally. A full local-stack run is optional; you may proceed directly to AWS after identifying the code changes and configuration required. The commands and configurations below are examples; confirm service names, versions, environment variables, and routes against the actual repository before using them.
 
 ## 1. Project goals and target architecture
 
@@ -72,22 +72,28 @@ This is the intended architecture, not EduTrack's existing architecture. Its dat
 
 You do not need to run every database configuration at once. Use planned demonstration stages to limit cost.
 
+## Expected end-to-end workflow
+
+Follow these steps in order. The phase references point to the detailed instructions below. Review the repository in Phase 1, then follow the AWS sequence. A full local application run is optional; the application can be tested after deployment or one service at a time.
+
+1. **Prepare AWS and control spending.** Choose the Region, inspect billing and credits, create a monthly budget and alerts, configure MFA and IAM, and prepare the VPC and security groups (Phases 2–3).
+2. **Create the baseline databases.** Create a private, encrypted RDS MySQL database for student records, then create the DynamoDB activity table and enable Streams (Phases 4–5). Start with the baseline configuration; add Multi-AZ, replicas, and Aurora later.
+3. **Adapt the application.** Configure Spring Boot to use RDS, add the DynamoDB activity integration, and set the Node/EC2 role permissions. Keep MongoDB for grades unless you have time to migrate that service (Phases 4–5 and 7).
+4. **Prepare the deployable source.** Review changes and secrets, then commit and push the branch so the EC2 instance can obtain the application (Phase 6).
+5. **Deploy the application.** Launch/configure EC2, use Systems Manager Session Manager, deploy the services, and put an Application Load Balancer in front of the web entry point (Phase 7).
+6. **Demonstrate application data operations.** Register/insert a sample student in RDS, retrieve it, update it, and verify the persisted value. Insert and retrieve a supplementary activity record in DynamoDB (Phases 4–5 and 7).
+7. **Demonstrate DynamoDB Streams.** Update or delete an activity item, show the stream record, then show the Lambda invocation and CloudWatch log output (Phase 5).
+8. **Explain relational availability and scaling.** Show RDS Multi-AZ, read replicas where supported, and Aurora; explain each design and compare expected cost (Phase 8).
+9. **Review operations and controls.** Show CloudWatch metrics/logs/alarms, CloudTrail API activity, AWS Config history, Session Manager, IAM, KMS, WAF, Shield, and the Shared Responsibility Model (Phases 9–10).
+10. **Close with cost and architecture evidence.** Review Trusted Advisor recommendations, Cost Explorer, Free Tier/account billing, the budget thresholds, architecture, database choices, security measures, and cleanup plan (Phase 11 and the final checklist).
+
+**Do not create Multi-AZ, read replicas, or Aurora until the baseline RDS application path works**, unless the assignment specifically requires them earlier. They are separate demonstration stages and can add charges.
+
 ---
 
-## Phase 1 — Prepare your computer and copy EduTrack
+## Phase 1 — Prepare the repository (a full local run is optional)
 
-### 1.1 Choose an AWS Region
-
-Use **Asia Pacific (Mumbai), `ap-south-1`**, unless your existing resources or credits require another region.
-
-1. Sign in to the [AWS Management Console](https://console.aws.amazon.com/).
-2. Open the Region selector.
-3. Select **Asia Pacific (Mumbai)**.
-4. Keep EC2, RDS, DynamoDB, CloudWatch, Systems Manager, and other regional resources in the same Region.
-
-**CloudFront exception:** If you protect the site through CloudFront, its associated WAF resources are configured in **US East (N. Virginia), `us-east-1`**, because CloudFront is global. See the [AWS WAF resource documentation](https://docs.aws.amazon.com/waf/latest/developerguide/how-aws-waf-works-resources.html).
-
-### 1.2 Fork and clone the repository
+### 1.1 Fork and clone the repository
 
 1. Open [EduTrack on GitHub](https://github.com/Zawalid/EduTrack).
 2. Select **Fork** and create a copy under your GitHub account.
@@ -123,7 +129,7 @@ git switch -c aws-deployment
 
 Work in your fork; do not modify the original author's repository.
 
-### 1.3 Inspect the codebase
+### 1.2 Inspect the codebase
 
 The repository's documented structure includes:
 
@@ -179,7 +185,15 @@ Identify:
 - Database schemas and initialization scripts.
 - Required OAuth and frontend environment variables.
 
-### 1.4 Run the original application locally
+Before choosing the final AWS database layout, record these repository-specific dependencies:
+- Spring Boot stores student records in MySQL.
+- The grades service currently uses MongoDB; keep it for the first deployment unless you plan a separate migration to DynamoDB.
+- The frontend's Prisma schema currently uses PostgreSQL for Auth.js user/account records. This is a separate workload from student records. RDS MySQL cannot serve this PostgreSQL schema unchanged. Decide whether to provision a separate PostgreSQL database or adapt and validate the Prisma schema/provider for a supported database. Do not reuse Kong's internal PostgreSQL database for application data.
+- The root Compose file does not include the frontend. Before deployment, either add a production-ready frontend service/container or document how it will be deployed separately and routed through the load balancer.
+
+These are implementation decisions, not reasons to block AWS account setup or database provisioning.
+
+### 1.3 Optional: run the original application locally
 
 From the repository root:
 
@@ -221,13 +235,24 @@ Verify that you can:
 6. Update the student's details.
 7. Use the grades functionality.
 
-**Do not proceed until the application works locally, or until you have clearly documented which features require repair.**
+**This local run is optional.** If it fails because AWS-only configuration, OAuth credentials, or a service is unavailable, record the blocker and continue with the AWS workflow. Test each service after it is connected to its AWS dependencies.
 
 ---
 
-## Phase 2 — Prepare AWS and control costs
+## Phase 2 — Set AWS region, access, and cost guardrails
 
-### 2.1 Check credits and billing
+### 2.1 Choose an AWS Region
+
+Use **Asia Pacific (Mumbai), `ap-south-1`**, unless your existing resources or credits require another region.
+
+1. Sign in to the [AWS Management Console](https://console.aws.amazon.com/).
+2. Open the Region selector.
+3. Select **Asia Pacific (Mumbai)**.
+4. Keep EC2, RDS, DynamoDB, CloudWatch, Systems Manager, and other regional resources in the same Region.
+
+**CloudFront exception:** If you protect the site through CloudFront, its associated WAF resources are configured in **US East (N. Virginia), `us-east-1`**, because CloudFront is global. See the [AWS WAF resource documentation](https://docs.aws.amazon.com/waf/latest/developerguide/how-aws-waf-works-resources.html).
+
+### 2.2 Check credits and billing
 
 Open [AWS Billing and Cost Management](https://console.aws.amazon.com/costmanagement/).
 
@@ -240,25 +265,22 @@ Review:
 
 Do not assume all database configurations, Multi-AZ deployments, or security services are free. Free Tier offerings depend on account plan, service, Region, and applicable limits. See the [AWS Free Tier documentation](https://docs.aws.amazon.com/us_en/awsaccountbilling/latest/aboutv2/free-tier.html).
 
-### 2.2 Create an AWS Budget before deployment
+### 2.3 Create an AWS Budget before deployment
 
 Open [AWS Budgets](https://console.aws.amazon.com/costmanagement/home#/budgets).
 
-1. Choose **Create budget**.
-2. Select a cost budget.
-3. Choose a monthly period.
-4. Enter an amount you can afford.
-5. Configure alerts, for example:
-   - Actual spend at 50%.
-   - Actual spend at 80%.
-   - Actual spend at 100%.
-   - Forecast spend at 100%.
-6. Add an email address you monitor.
-7. Create the budget.
+1. Select **Create budget**.
+2. Choose **Customize (advanced)** if the first screen offers it, then choose **Cost budget** and select **Next**.
+3. Enter **Budget name** `edutrack-monthly-cost-limit`; set **Period** to **Monthly**, **Budget renewal** to **Recurring**, and **Budgeting method** to **Fixed**.
+4. Enter your own affordable monthly amount in **Enter your budgeted amount**. Do not copy a sample amount without checking prices for your selected Region and services.
+5. Leave filters unselected if you want to see all account costs; otherwise, choose **Add filter → Region** and select `Asia Pacific (Mumbai)` only if you deliberately want a Mumbai-only budget.
+6. Select **Next**. Under **Add an alert threshold**, create these alerts one at a time: **Actual cost**, threshold `50`, **% of budget**; repeat with `80` and `100`. Add another alert with **Forecasted cost**, threshold `100`, **% of budget**.
+7. For each alert, enter the email address to notify in **Email recipients**. Select **Next**, review the summary and thresholds, then select **Create budget**.
+8. Open the created budget and confirm its status and alert thresholds. Open each notification email and follow AWS's verification link; an unverified address does not receive budget notifications. Check spam/junk mail if the verification message is missing.
 
 Adjust thresholds to your budget and available credits. A budget notification is **not** automatically a spending cap; it alerts you but does not necessarily stop resources or prevent further charges. See [AWS Budgets pricing and details](https://aws.amazon.com/aws-cost-management/aws-budgets/pricing/).
 
-### 2.3 Configure IAM security
+### 2.4 Configure IAM security
 
 Open [IAM](https://console.aws.amazon.com/iam/).
 
@@ -276,54 +298,66 @@ You may temporarily need elevated permissions to build infrastructure, but do no
 
 ## Phase 3 — Design the network
 
-### 3.1 Create or inspect a VPC
+### 3.1 Create the VPC and subnets in the console
 
-Open [Amazon VPC](https://console.aws.amazon.com/vpc/).
+Use this concrete layout for the walkthrough. The EC2 instance runs in one public subnet so it can download Docker images without a NAT Gateway; its security group only permits application traffic from the Load Balancer. RDS remains in private subnets. This keeps the first demonstration less expensive while still isolating the database.
 
-Reuse an existing VPC only if its networking and security boundaries meet the requirements. Otherwise, create a VPC using an example CIDR such as:
+Before creating anything, use the console's Region selector to confirm **Asia Pacific (Mumbai), `ap-south-1`**. In the steps below, choose any two different Availability Zones shown in your account. AWS accounts can map Availability Zone letters differently, so the important requirement is that the two selected zones are distinct.
 
-```text
-10.20.0.0/16
-```
+1. Open [Amazon VPC](https://console.aws.amazon.com/vpc/) and select **VPC dashboard → Create VPC**.
+2. For **Resources to create**, select **VPC only**.
+3. Enter **Name tag auto-generation**: `edutrack-vpc`.
+4. Set **IPv4 CIDR block** to `10.20.0.0/16`; leave IPv6 disabled for this exercise; leave tenancy as **Default**.
+5. Select **Create VPC**. Open the created VPC and record its VPC ID.
+6. In the left navigation, select **Subnets → Create subnet**.
+7. For **VPC ID**, select `edutrack-vpc`.
+8. Add these four subnet rows. For each row, enter the **Subnet name**, choose one of the two distinct Availability Zones, and enter the IPv4 CIDR shown:
 
-Check for overlap with existing networks before using this range.
+   | Subnet name | Availability Zone | IPv4 subnet CIDR block | Purpose |
+   |---|---|---|---|
+   | `edutrack-public-a` | First selected zone | `10.20.1.0/24` | ALB and EC2 application |
+   | `edutrack-public-b` | Second selected zone | `10.20.2.0/24` | ALB |
+   | `edutrack-db-private-a` | First selected zone | `10.20.21.0/24` | RDS subnet group |
+   | `edutrack-db-private-b` | Second selected zone | `10.20.22.0/24` | RDS subnet group |
 
-### 3.2 Create subnets in two Availability Zones
+9. Select **Create subnet**. Open `edutrack-public-a`; choose **Actions → Edit subnet settings**, check **Enable auto-assign public IPv4 address**, and select **Save**. Repeat for `edutrack-public-b`. Leave auto-assign public IPv4 disabled on both database subnets.
 
-Example layout:
+The CIDRs above fit inside `10.20.0.0/16`. If that range overlaps a network you already use, choose a different non-overlapping VPC CIDR and change every subnet CIDR consistently.
 
-| Subnet | Example CIDR | Purpose |
-|---|---|---|
-| Public subnet A | `10.20.1.0/24` | Load Balancer |
-| Public subnet B | `10.20.2.0/24` | Load Balancer |
-| Application subnet A | `10.20.11.0/24` | EC2 application |
-| Database subnet A | `10.20.21.0/24` | RDS/Aurora |
-| Database subnet B | `10.20.22.0/24` | RDS/Aurora subnet group |
+### 3.2 Create and attach an Internet Gateway
 
-Choose two different Availability Zones in Mumbai. These are illustrative CIDRs; ensure they fit inside your VPC and do not overlap.
+An Internet Gateway attaches to the **VPC**, not to an individual subnet. The public subnet receives internet routing through its route table.
 
-- Public subnets need a route to an Internet Gateway.
-- Database subnets should not have direct internet access.
-- The RDS subnet group should use subnets in at least two Availability Zones.
-- The application must reach databases over private networking.
+1. In VPC left navigation, choose **Internet gateways → Create internet gateway**.
+2. Enter **Name tag** `edutrack-igw`, then select **Create internet gateway**.
+3. Select the new `edutrack-igw`; choose **Actions → Attach to a VPC**.
+4. In **Available VPCs**, select `edutrack-vpc`; choose **Attach internet gateway**.
+5. In left navigation, choose **Route tables → Create route table**.
+6. Enter **Name** `edutrack-public-rt`; for **VPC**, select `edutrack-vpc`; choose **Create route table**.
+7. Select `edutrack-public-rt`, open **Routes → Edit routes → Add route**.
+8. Set **Destination** to `0.0.0.0/0`. Set **Target** to **Internet Gateway**, then select `edutrack-igw`. Choose **Save changes**.
+9. With `edutrack-public-rt` selected, open **Subnet associations → Edit subnet associations**. Check only `edutrack-public-a` and `edutrack-public-b`; choose **Save associations**.
+10. Open **Route tables**, select `edutrack-public-rt`, then open **Subnet associations**. Confirm only the two public subnets are associated with it. Next select the route table whose **Main** column is **Yes** for `edutrack-vpc`, then open **Routes** and confirm it has `10.20.0.0/16 → local` and no `0.0.0.0/0` route. Subnets that are not explicitly associated with another route table use this main table automatically, so leave both database subnets unassociated with `edutrack-public-rt`. If either database subnet is associated with the public table, use that table's **Subnet associations → Edit subnet associations**, uncheck the database subnet, and save; it will then use the main table.
 
-A private application subnet is preferable for a more secure design but usually needs NAT or another outbound connectivity arrangement to download packages and container images. NAT Gateways can add significant cost. A simpler demonstration option is an EC2 instance in a public subnet whose security group accepts application traffic only from the Load Balancer. Keep RDS private.
+The main route table gives database subnets VPC-local communication, while the separate public route table sends internet-bound IPv4 traffic through the attached gateway. AWS's console workflow is documented in [Create a VPC](https://docs.aws.amazon.com/vpc/latest/userguide/create-vpc.html), [Create a subnet](https://docs.aws.amazon.com/vpc/latest/userguide/create-subnets.html), and [Internet gateways](https://docs.aws.amazon.com/vpc/latest/userguide/working-with-igw.html).
 
-### 3.3 Create security groups
+### 3.3 Create the three security groups
 
-| Security group | Inbound rules |
+In VPC left navigation, choose **Security groups → Create security group**. For each group, enter its name and description, select `edutrack-vpc` for **VPC**, add the listed inbound rules, leave outbound rules at the default **All traffic → 0.0.0.0/0**, and choose **Create security group**. Use the security-group picker as the source when a rule names another security group; do not type a public IP range for those rules.
+
+Create these groups:
+
+| Group name | Inbound rules to add |
 |---|---|
-| `edutrack-alb-sg` | HTTP 80 from the internet; HTTPS 443 when configured |
-| `edutrack-app-sg` | Application port only from `edutrack-alb-sg` |
-| `edutrack-db-sg` | MySQL TCP 3306 only from `edutrack-app-sg` |
+| `edutrack-alb-sg` | **HTTP**, TCP 80, source **Anywhere-IPv4** (`0.0.0.0/0`) for initial testing. Add **HTTPS**, TCP 443, same source only after configuring the certificate/listener. |
+| `edutrack-app-sg` | **Custom TCP**, port `3000`, source security group `edutrack-alb-sg` (Next.js frontend target). If your ALB target is Kong instead, use its configured proxy port, normally `8000`, and make that same port the target group's port. |
+| `edutrack-db-sg` | **MySQL/Aurora**, TCP 3306, source security group `edutrack-app-sg`. Add a separate PostgreSQL TCP 5432 rule from `edutrack-app-sg` only if you deploy the frontend's separate Prisma/Auth database in this VPC. |
 
-If MongoDB remains in use, restrict its port to the application components that need it.
-
-Do **not** open ports 3306, 27017, or 9092 to `0.0.0.0/0`. Do not expose Kong's administrative interface publicly. Prefer Systems Manager Session Manager to opening SSH port 22.
+If the ALB fronts the Next.js frontend on port 3000 and that frontend calls Kong privately, do not add a public inbound rule for Kong's proxy/admin ports. Docker containers on the same Compose network should use service names and container ports. Do **not** open 3306, 5432, 27017, 9092, or Kong's admin ports to `0.0.0.0/0`. Do not add SSH port 22; use Systems Manager Session Manager in Phase 7.
 
 ---
 
-## Phase 4 — Create Amazon RDS for student records
+## Phase 4 — Create the primary RDS database for student records
 
 EduTrack's student service uses MySQL. Spring Data JPA can work with Amazon RDS for MySQL, so the application can retain its general structure while changing its database connection.
 
@@ -331,35 +365,37 @@ EduTrack's student service uses MySQL. Spring Data JPA can work with Amazon RDS 
 
 In [Amazon RDS](https://console.aws.amazon.com/rds/):
 
-1. Choose **Subnet groups**.
-2. Create `edutrack-db-subnets`.
-3. Select your VPC.
-4. Select the two private database subnets in different Availability Zones.
-5. Create the subnet group.
+1. In the left navigation, choose **Subnet groups → Create DB subnet group**.
+2. Enter **Name** `edutrack-db-subnets` and **Description** `Private subnets for EduTrack databases`.
+3. For **VPC**, select `edutrack-vpc`.
+4. Under **Add subnets**, select the two Availability Zones used in Phase 3.
+5. In **Subnets**, select `edutrack-db-private-a` and `edutrack-db-private-b`; verify their CIDRs are `10.20.21.0/24` and `10.20.22.0/24`.
+6. Choose **Create**. Confirm the new subnet group lists both zones before proceeding.
 
 ### 4.2 Create the RDS MySQL database
 
-Choose **Databases → Create database**. Select options similar to these, where available:
+In RDS, choose **Databases → Create database**. Select **Standard create**, then use these values on the database creation form. Some labels move as AWS updates the console; use the named section and field, and leave unspecified advanced settings at their defaults.
 
 | Setting | Suggested choice |
 |---|---|
 | Creation method | Standard create |
 | Engine | MySQL |
-| Template | Dev/Test, if offered |
+| Template | **Free tier** only if the console confirms eligibility and the chosen options fit its allowance; otherwise **Dev/Test** |
 | DB identifier | `edutrack-mysql` |
-| Credentials | Secrets Manager-managed credentials if available and suitable |
-| Instance class | Small eligible class appropriate for testing |
-| Storage | Small general-purpose SSD allocation |
-| Availability | Single-AZ initially, if supported by the selected template |
-| VPC | Project VPC |
+| Credentials | Under **Settings**, enter master username `edutrackadmin`; select **Manage master credentials in AWS Secrets Manager** if available. If not, choose self-managed credentials and create a strong unique password; save it securely and never commit it. |
+| DB instance class | Under **Instance configuration**, choose a burstable class marked eligible for your account/Region, such as `db.t3.micro` if offered. |
+| Storage | General Purpose SSD (`gp3` if offered); enter `20` GiB; leave storage autoscaling off for this short demo unless required. |
+| Availability | **Single-AZ DB instance deployment** for initial testing. |
+| VPC | Under **Connectivity**, choose `edutrack-vpc`. |
 | DB subnet group | `edutrack-db-subnets` |
 | Public access | **No** |
-| Security group | `edutrack-db-sg` |
-| Encryption | Enabled |
-| Automated backups | Enabled with a suitable short retention period |
-| Deletion protection | Enable once ready if you can manage the additional deletion step later |
+| VPC security group | Choose **Choose existing**, remove any default group if selected, then select `edutrack-db-sg`. |
+| Encryption | Under **Additional configuration**, keep **Enable encryption** checked; default AWS owned key is acceptable for the baseline. |
+| Initial database name | Under **Additional configuration**, enter `edutrack` if the application expects that schema; check the Spring config first. |
+| Automated backups | Keep automated backups enabled; use a short retention such as `1` day for a temporary test database. |
+| Deletion protection | Leave off for a temporary demonstration database; enable it before retaining valuable data. |
 
-Choose a MySQL version compatible with the application's JDBC driver and configuration. Start small and review the price estimate before creating the database. AWS-managed RDS encryption can be used initially; a customer-managed KMS key can be demonstrated later if required.
+Under **Engine options**, select a MySQL version compatible with the application's JDBC driver. On the final review, confirm **Public access: No**, the DB subnet group, security group, 20 GiB storage, and displayed monthly estimate. Select **Create database** only after checking the account's cost limits.
 
 Wait until the database is **Available**. Copy its endpoint from the database details. It resembles:
 
@@ -398,9 +434,20 @@ Store credentials in Secrets Manager or Systems Manager Parameter Store. Never c
 
 If Hibernate creates the schema automatically, verify its behavior before relying on it in production. Controlled schema migrations are preferable for a long-lived application.
 
-### 4.4 Test connectivity and student CRUD
+### 4.4 Resolve the frontend authentication database
 
-From an authorized environment that can reach the private database, you can test using the MySQL client:
+The frontend's Prisma schema uses PostgreSQL for its Auth.js adapter. Decide how to host that database before enabling Google sign-in in the deployed app:
+
+1. Provision a separate private PostgreSQL database, or adapt the Prisma datasource and migrations to use a database supported by your chosen design.
+2. Keep the application auth tables separate from Kong's database. Do not point Prisma at Kong's internal database.
+3. Configure `DATABASE_URL` and `DIRECT_DATABASE_URL` for the selected database. Store production values in Parameter Store or Secrets Manager, not in Git.
+4. Apply the Prisma migrations from a host that can reach the private database, then verify that a test sign-in creates the expected user/account records.
+
+This extra database is a current-code dependency and may add cost. If you change the Prisma provider, validate the schema and migrations before relying on that choice.
+
+### 4.5 Verify RDS connectivity and student CRUD after deployment
+
+Complete this verification after Phase 7 deploys the application. If you are testing only the Spring Boot service earlier, use an authorized environment that can reach the private database. For a manual database check, use the MySQL client:
 
 ```bash
 mysql -h YOUR_RDS_ENDPOINT \
@@ -411,7 +458,7 @@ mysql -h YOUR_RDS_ENDPOINT \
 
 Replace the placeholders with real values. The password is prompted interactively. Do not attempt to connect from an arbitrary public machine when the database is private.
 
-Ensure the RDS security group allows MySQL traffic from the application security group. Start the Spring Boot service and inspect its logs.
+Ensure the RDS security group allows MySQL traffic from the application security group. Start the Spring Boot service and inspect its logs. In the normal workflow, this happens on EC2 in Phase 7.
 
 Use the application or API to:
 1. Register a student.
@@ -424,101 +471,24 @@ The schema and frontend form must include the required student ID, name, departm
 
 ---
 
-## Phase 5 — Configure Multi-AZ, read replicas, and Aurora
-
-### 5.1 Demonstrate RDS Multi-AZ
-
-RDS Multi-AZ DB instance deployments maintain a synchronous standby in another Availability Zone and can automatically fail over when required. The standby is for availability, not ordinary read traffic. See [RDS Multi-AZ documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html).
-
-1. In RDS, select `edutrack-mysql`.
-2. Choose **Modify**.
-3. Find the availability or Multi-AZ setting.
-4. Enable a Multi-AZ deployment.
-5. Review the changes and cost estimate.
-6. Apply the modification.
-7. Wait for the change to complete.
-
-The exact options depend on the engine, instance, and Region.
-
-**Demonstration:**
-1. Retrieve a student through the application.
-2. Record the database status and endpoint.
-3. Explain that RDS maintains a standby in another Availability Zone.
-4. If practical, initiate a controlled failover using the supported RDS console action.
-5. Monitor database status and application logs.
-6. Retry student retrieval.
-7. Explain that the application should reconnect after failover if it handles transient connection errors correctly.
-
-Do not terminate the primary instance manually. One controlled failover, if the configuration permits it, is sufficient.
-
-### 5.2 Demonstrate an RDS Read Replica
-
-A read replica is intended to serve read traffic and help scale read-heavy workloads. Standard RDS read replicas generally replicate asynchronously, so replication lag is possible. See [RDS Read Replica documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html).
-
-1. Select the source database.
-2. Open **Actions**.
-3. Choose **Create read replica**, if supported.
-4. Name it `edutrack-mysql-read`.
-5. Select an eligible instance class and storage configuration.
-6. Configure private networking and security groups.
-7. Create the replica and wait until it is available.
-
-Use the primary for writes and configure the application to direct suitable read queries to the replica. Creating a replica does not automatically redirect application queries.
-
-Demonstrate replication by inserting a student into the primary and checking when it becomes visible on the replica. Explain that asynchronous replication does not guarantee immediate consistency.
-
-### 5.3 Demonstrate Aurora separately
-
-Aurora is a managed relational database engine compatible with MySQL and PostgreSQL. It has a different architecture from standard RDS MySQL.
-
-For comparison, use **Aurora MySQL-Compatible**:
-
-1. Open RDS and choose **Create database**.
-2. Select Aurora MySQL-Compatible.
-3. Choose a development-oriented template if available.
-4. Use the identifier `edutrack-aurora-demo`.
-5. Select the project VPC and private DB subnet group.
-6. Disable public access.
-7. Enable encryption.
-8. Restrict access through the database security group.
-9. Select the smallest suitable supported configuration and review its price.
-10. Create the cluster and wait until available.
-
-Available configurations and pricing vary; check the current [Aurora documentation](https://docs.aws.amazon.com/en_en/AmazonRDS/latest/AuroraUserGuide/USER_OnDemandDBInstances.html).
-
-| Feature | Standard RDS for MySQL | Aurora MySQL-Compatible |
-|---|---|---|
-| Engine | MySQL | Aurora, compatible with MySQL |
-| Storage architecture | RDS-managed database storage | Aurora distributed cluster storage |
-| High availability | Multi-AZ options | Cluster-based architecture spanning Availability Zones |
-| Read scaling | Supported read replicas | Aurora reader instances and endpoints |
-| Application integration | MySQL driver | MySQL-compatible driver, subject to compatibility testing |
-| Cost | Instance, storage, and deployment dependent | Cluster, compute, storage, and I/O dependent |
-
-Compare architecture, failover, read scaling, and estimated costs in your report. You do not need to migrate the working application to Aurora; standard RDS can remain the application's primary database while Aurora is a separate comparison demonstration.
-
-Delete the Aurora demonstration cluster when it is no longer required, after saving necessary evidence and data.
-
----
-
-## Phase 6 — Add DynamoDB and DynamoDB Streams
+## Phase 5 — Add DynamoDB and DynamoDB Streams
 
 The existing project uses MongoDB for grades. DynamoDB is not a drop-in replacement for MongoDB because their data models and query operations differ.
 
 The least disruptive approach is to keep the existing grades service initially and use DynamoDB for a new feature: **student activity records and preferences**. This demonstrates SQL and NoSQL integration. If the assessment requires MongoDB to be removed entirely, the grades service must also be migrated.
 
-### 6.1 Create the DynamoDB table
+### 5.1 Create the DynamoDB table
 
 Open [Amazon DynamoDB](https://console.aws.amazon.com/dynamodb/).
 
-1. Choose **Tables → Create table**.
-2. Enter `EduTrackStudentActivity`.
-3. Set partition key `studentId`, type `String`.
-4. Set sort key `activityId`, type `String`.
-5. Choose on-demand capacity if available and appropriate.
-6. Enable encryption at rest.
-7. Review optional backup/recovery settings.
-8. Create the table.
+1. Confirm the Region selector shows `ap-south-1`; choose **Tables → Create table**.
+2. Under **Table details**, enter **Table name** `EduTrackStudentActivity`.
+3. Under **Partition key**, enter `studentId` and select type **String**.
+4. Check **Add sort key**; enter `activityId` and select type **String**.
+5. Under **Table settings**, choose **Customize settings** if shown. Set **Table class** to **DynamoDB Standard** and **Read/write capacity settings** to **On-demand**. Leave secondary indexes empty for this demo.
+6. Under **Encryption at rest**, leave encryption enabled with the default AWS owned key for the baseline. Add a customer-managed KMS key only after completing Phase 10.2.
+7. Leave deletion protection off for a temporary test table unless you are keeping valuable data. Select **Create table**.
+8. Open the table details and wait for **Status: Active** before inserting records.
 
 Example item:
 
@@ -535,24 +505,24 @@ Example item:
 
 This is an illustrative data model. The composite key allows multiple activity items for one student.
 
-### 6.2 Enable DynamoDB Streams
+### 5.2 Enable DynamoDB Streams
 
-1. Open the table's **Exports and streams** or stream settings section.
-2. Find **DynamoDB Streams**.
-3. Enable the stream.
-4. Choose **New and old images** to capture previous and updated item values.
-5. Save the changes.
+1. In the DynamoDB console, select **Tables → EduTrackStudentActivity**.
+2. Open the **Exports and streams** tab and scroll to **DynamoDB stream details**.
+3. Select **Turn on** (or **Enable**) next to DynamoDB stream.
+4. In **View type**, select **New and old images**.
+5. Select **Turn on stream** and confirm the stream status changes to enabled. Copy the stream ARN for the Lambda setup.
 
 DynamoDB Streams captures item-level changes for downstream consumers. See the [DynamoDB Streams documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Streams.html).
 
-First demonstrate it manually:
-1. Open **Explore table items**.
-2. Insert a sample activity.
-3. Update the item.
-4. Delete the item.
-5. Show the changes in the stream.
+First demonstrate the table mutations manually. DynamoDB Streams is a change feed; use the Lambda consumer in 5.4 and its CloudWatch logs to display the actual stream event payload.
+1. Open the table and select **Explore table items → Create item**.
+2. In the item editor, use **JSON view** and enter the sample item shown above; choose **Create item**.
+3. Select the item, choose **Edit item**, change `description`, and save the change.
+4. Select the item and choose **Delete item** only after confirming this is disposable demo data.
+5. After the Lambda trigger is configured in 5.4, use a new test item for each operation and inspect the Lambda log event to point out `INSERT`, `MODIFY`, and `REMOVE` record types. The DynamoDB console's **Explore table items** view shows current table items, not a historical stream-event browser.
 
-### 6.3 Integrate DynamoDB into the Node.js backend
+### 5.3 Integrate DynamoDB into the Node.js backend
 
 From the backend directory:
 
@@ -615,18 +585,19 @@ These are examples, not credentials. Add API routes and call the module from the
 
 On EC2, use an IAM role to supply AWS credentials. Do not put access keys in the application configuration.
 
-### 6.4 Trigger downstream processing with Lambda
+### 5.4 Trigger downstream processing with Lambda
 
 Open [AWS Lambda](https://console.aws.amazon.com/lambda/).
 
-1. Create `edutrack-activity-stream-handler`.
-2. Choose a supported Node.js runtime.
-3. Create or select an execution role.
-4. Give the role permission to read the relevant DynamoDB stream and write application logs.
-5. Create the function.
-6. Choose **Add trigger** and select DynamoDB.
-7. Select the `EduTrackStudentActivity` table and its stream.
-8. Configure a suitable batch size and enable the trigger.
+1. Select **Functions → Create function → Author from scratch**.
+2. Enter **Function name** `edutrack-activity-stream-handler`; choose a currently supported **Node.js** runtime and **Architecture** `x86_64`.
+3. Under **Permissions**, choose **Create a new role with basic Lambda permissions**, then select **Create function**.
+4. Open **Configuration → Permissions**, select the execution role name to open it in IAM, then choose **Add permissions → Attach policies**. Attach `AWSLambdaDynamoDBExecutionRole` (grants stream read and CloudWatch Logs permissions), then return to the Lambda function.
+5. Open the **Code** tab, replace the starter code with the example below, and select **Deploy**.
+6. In **Function overview**, choose **Add trigger**. Select **DynamoDB** as the source.
+7. In **DynamoDB table**, choose `EduTrackStudentActivity`. Select the enabled stream whose view type is **New and old images**.
+8. Set **Batch size** to `10`, leave **Starting position** as **Latest**, check **Enable trigger**, then choose **Add**.
+9. Open **Configuration → Triggers** and verify the trigger is enabled. The first event created before enabling a `LATEST` trigger may not be processed; create a fresh test item afterward.
 
 Example function:
 
@@ -660,26 +631,53 @@ Application → DynamoDB item change → DynamoDB Stream
 
 ---
 
+## Phase 6 — Review, commit, and push the application changes
+
+After reviewing the application and AWS configuration changes, commit to your fork. A complete local-stack run is optional; do not commit until targeted changes are reviewed:
+
+```bash
+cd ~/Documents/aws-projects/EduTrack
+
+git status
+git diff --stat
+```
+
+Before committing, ensure you are not including:
+- Database passwords.
+- AWS access keys.
+- Production `.env` files.
+- OAuth client secrets.
+- Private certificates.
+- SSH private keys.
+
+Update `.gitignore` as appropriate, then:
+
+```bash
+git add .
+git commit -m "Adapt EduTrack for AWS deployment"
+git push -u origin aws-deployment
+```
+
+This pushes the branch to your own GitHub fork. Pushing source code to GitHub does **not** deploy it to AWS. The EC2 deployment is separate; source changes must be rebuilt and redeployed.
+
+---
+
 ## Phase 7 — Deploy EduTrack on EC2
 
 ### 7.1 Launch an EC2 instance
 
-Open [Amazon EC2](https://console.aws.amazon.com/ec2/) and choose **Launch instance**.
+Open [Amazon EC2](https://console.aws.amazon.com/ec2/) in `ap-south-1`, then choose **Instances → Launch instances**. Use these form values:
 
-| Setting | Recommendation |
-|---|---|
-| Name | `edutrack-server` |
-| AMI | Ubuntu Server LTS |
-| Instance type | Small instance suitable for the application, subject to testing |
-| Key pair | Create/select one for recovery if needed; prefer Session Manager |
-| VPC | Project VPC |
-| Subnet | Application subnet |
-| Public IP | Only if using the public-subnet approach |
-| Security group | `edutrack-app-sg` |
-| Storage | Reasonable root volume; expand if necessary |
-| IAM instance profile | Application/SSM role |
+1. Under **Name and tags**, enter `edutrack-server`.
+2. Under **Application and OS Images**, select **Ubuntu Server 24.04 LTS** (64-bit x86) or the current Ubuntu LTS AMI shown in your Region.
+3. Under **Instance type**, select a burstable type available to your account. Start with at least 2 vCPU/4 GiB RAM if your containers fit; check the price and free-tier eligibility before selecting it.
+4. Under **Key pair (login)**, choose **Proceed without a key pair** because the plan uses Session Manager. Create/download a key pair only if you have a documented recovery need and can store the private key securely.
+5. Expand **Network settings → Edit**. Set **VPC** to `edutrack-vpc`, **Subnet** to `edutrack-public-a`, **Auto-assign public IP** to **Enable**, and **Firewall (security groups)** to **Select existing security group**. Select only `edutrack-app-sg`.
+6. Under **Configure storage**, keep the AMI root volume or set it to `30` GiB General Purpose SSD if the console allows it and the cost is acceptable. Docker images/logs consume disk space.
+7. Expand **Advanced details**. For **IAM instance profile**, select the EC2 role created in 7.2. Leave user data blank for this manual walkthrough.
+8. Review the summary and select **Launch instance**. Open the instance details and wait for **Instance state: Running** and both status checks to pass.
 
-EduTrack runs multiple containers, so the smallest instance may not have enough memory.
+This demo places EC2 in a public subnet to avoid a NAT Gateway charge. Its security group still blocks direct web traffic; only the ALB security group can reach the application port. Do not add an SSH inbound rule. Multiple containers need memory, so a smaller instance may need services disabled or a larger paid instance.
 
 ### 7.2 Create an EC2 IAM role
 
@@ -734,6 +732,8 @@ Configure:
 - Frontend public URL.
 - Required NextAuth/OAuth settings.
 
+For this repository, inspect and set the actual variable names used by the code. The frontend currently expects `STUDENTS_URL`, `GRADES_URL`, `AUTH_SECRET`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `DATABASE_URL`, and `DIRECT_DATABASE_URL`. Its backend API URLs must match the deployment topology. When the frontend and APIs share the Docker network, the service URLs are typically `http://spring-app:8080/api/students` and `http://nodejs-app:3001/api/grades`; from a process running directly on the EC2 host, use the host-published ports instead. Keep the Prisma auth database URLs private and consistent with the provider decision in Phase 4.4.
+
 Do not blindly copy a local `.env` file to EC2; it may contain localhost URLs, development credentials, or invalid production settings.
 
 ### 7.6 Start the application
@@ -747,7 +747,7 @@ docker compose ps
 docker compose logs --tail=200
 ```
 
-These commands start services defined in the Compose files. The frontend is not defined in the root Compose file described earlier; deploy it using the actual frontend production build configuration or add a suitable frontend service.
+These commands start services defined in the Compose files. The frontend is not defined in the root Compose file. Complete the frontend deployment decision in Phase 1 before this step: either build and run it as a production container on EC2, or deploy it separately and configure its backend URLs and public URL. Route the browser-facing entry point through the load balancer; keep database ports private.
 
 Verify:
 - Spring Boot connects to RDS.
@@ -761,17 +761,23 @@ Only the intended web entry point should accept public traffic.
 
 ### 7.7 Configure an Application Load Balancer
 
-To demonstrate WAF with a regional resource, use an Application Load Balancer.
+In the EC2 console, choose **Load Balancing → Target Groups → Create target group**:
 
-1. Open EC2 → **Load Balancers**.
-2. Choose **Create load balancer** → **Application Load Balancer**.
-3. Make it internet-facing.
-4. Select the VPC and two public subnets in different Availability Zones.
-5. Attach `edutrack-alb-sg`.
-6. Create a target group for the application server.
-7. Register the EC2 instance.
-8. Configure a health-check path that returns success.
-9. Create an HTTP listener for initial testing.
+1. Choose **Instances** as the target type; enter target group name `edutrack-web-tg`.
+2. Set **Protocol** `HTTP`, **Port** `3000` (the Next.js container's published/listening port), and **VPC** `edutrack-vpc`.
+3. Under **Health checks**, use protocol `HTTP` and path `/`. If the frontend's `/` does not return a success status, use a known healthy path from the application.
+4. Choose **Next**, select `edutrack-server`, keep port `3000`, choose **Include as pending below**, then choose **Create target group**.
+
+Now choose **Load Balancers → Create load balancer → Application Load Balancer → Create**:
+
+1. Enter **Load balancer name** `edutrack-alb`; choose **Scheme: Internet-facing** and **IP address type: IPv4**.
+2. Under **Network mapping**, choose **VPC** `edutrack-vpc`; select the two public subnets `edutrack-public-a` and `edutrack-public-b` (one in each selected Availability Zone).
+3. Under **Security groups**, select `edutrack-alb-sg` and remove the default security group if the console added it.
+4. Under **Listeners and routing**, keep listener **HTTP:80** and set its **Default action** to **Forward to `edutrack-web-tg`**.
+5. Review the summary and select **Create load balancer**. Wait until its state is **Active**.
+6. Open **Target Groups → edutrack-web-tg → Targets**. Wait for the registered EC2 target to become **Healthy**. If it is unhealthy, check that the frontend is running/listening on port 3000, that `edutrack-app-sg` allows TCP 3000 from `edutrack-alb-sg`, and that the health-check path returns HTTP success.
+
+If the EC2 deployment serves Kong directly rather than Next.js, use the Kong proxy port configured in Compose (typically 8000) in both target group and app security group. Do not use Kong's admin port. The root Compose file currently does not include the frontend, so add/deploy the frontend before expecting a port-3000 target to become healthy.
 
 After HTTP routing works, issue a certificate through AWS Certificate Manager and configure HTTPS. Redirect HTTP to HTTPS only after verifying HTTPS.
 
@@ -781,9 +787,86 @@ Test the Load Balancer DNS name in a browser, then verify login, student registr
 
 ---
 
-## Phase 8 — Monitoring and auditing
+## Phase 8 — Demonstrate Multi-AZ, read replicas, and Aurora
 
-### 8.1 CloudWatch
+### 8.1 Demonstrate RDS Multi-AZ
+
+RDS Multi-AZ DB instance deployments maintain a synchronous standby in another Availability Zone and can automatically fail over when required. The standby is for availability, not ordinary read traffic. See [RDS Multi-AZ documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Concepts.MultiAZSingleStandby.html).
+
+1. In RDS, select `edutrack-mysql`.
+2. Choose **Modify**.
+3. Find the availability or Multi-AZ setting.
+4. Enable a Multi-AZ deployment.
+5. Review the changes and cost estimate.
+6. Apply the modification.
+7. Wait for the change to complete.
+
+The exact options depend on the engine, instance, and Region.
+
+**Demonstration:**
+1. Retrieve a student through the application.
+2. Record the database status and endpoint.
+3. Explain that RDS maintains a standby in another Availability Zone.
+4. If practical, initiate a controlled failover using the supported RDS console action.
+5. Monitor database status and application logs.
+6. Retry student retrieval.
+7. Explain that the application should reconnect after failover if it handles transient connection errors correctly.
+
+Do not terminate the primary instance manually. One controlled failover, if the configuration permits it, is sufficient.
+
+### 8.2 Demonstrate an RDS Read Replica
+
+A read replica is intended to serve read traffic and help scale read-heavy workloads. Standard RDS read replicas generally replicate asynchronously, so replication lag is possible. See [RDS Read Replica documentation](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ReadRepl.html).
+
+1. Select the source database.
+2. Open **Actions**.
+3. Choose **Create read replica**, if supported.
+4. Name it `edutrack-mysql-read`.
+5. Select an eligible instance class and storage configuration.
+6. Configure private networking and security groups.
+7. Create the replica and wait until it is available.
+
+Use the primary for writes and configure the application to direct suitable read queries to the replica. Creating a replica does not automatically redirect application queries.
+
+Demonstrate replication by inserting a student into the primary and checking when it becomes visible on the replica. Explain that asynchronous replication does not guarantee immediate consistency.
+
+### 8.3 Demonstrate Aurora separately
+
+Aurora is a managed relational database engine compatible with MySQL and PostgreSQL. It has a different architecture from standard RDS MySQL.
+
+For comparison, use **Aurora MySQL-Compatible**:
+
+1. Open RDS and choose **Create database**.
+2. Select Aurora MySQL-Compatible.
+3. Choose a development-oriented template if available.
+4. Use the identifier `edutrack-aurora-demo`.
+5. Select the project VPC and private DB subnet group.
+6. Disable public access.
+7. Enable encryption.
+8. Restrict access through the database security group.
+9. Select the smallest suitable supported configuration and review its price.
+10. Create the cluster and wait until available.
+
+Available configurations and pricing vary; check the current [Aurora documentation](https://docs.aws.amazon.com/en_en/AmazonRDS/latest/AuroraUserGuide/USER_OnDemandDBInstances.html).
+
+| Feature | Standard RDS for MySQL | Aurora MySQL-Compatible |
+|---|---|---|
+| Engine | MySQL | Aurora, compatible with MySQL |
+| Storage architecture | RDS-managed database storage | Aurora distributed cluster storage |
+| High availability | Multi-AZ options | Cluster-based architecture spanning Availability Zones |
+| Read scaling | Supported read replicas | Aurora reader instances and endpoints |
+| Application integration | MySQL driver | MySQL-compatible driver, subject to compatibility testing |
+| Cost | Instance, storage, and deployment dependent | Cluster, compute, storage, and I/O dependent |
+
+Compare architecture, failover, read scaling, and estimated costs in your report. You do not need to migrate the working application to Aurora; standard RDS can remain the application's primary database while Aurora is a separate comparison demonstration.
+
+Delete the Aurora demonstration cluster when it is no longer required, after saving necessary evidence and data.
+
+---
+
+## Phase 9 — Review monitoring, auditing, and configuration history
+
+### 9.1 CloudWatch
 
 Open [CloudWatch](https://console.aws.amazon.com/cloudwatch/).
 
@@ -804,7 +887,7 @@ Generate legitimate test activity and confirm the alarm behaves as expected.
 
 **Evidence:** EC2 metrics, RDS metrics, application logs, and alarm configuration.
 
-### 8.2 CloudTrail
+### 9.2 CloudTrail
 
 Open [CloudTrail](https://console.aws.amazon.com/cloudtrail/).
 
@@ -826,7 +909,7 @@ Demonstrate it by making a harmless change, such as changing a resource tag:
 
 Check current CloudTrail pricing before enabling extra event categories.
 
-### 8.3 AWS Config
+### 9.3 AWS Config
 
 Open [AWS Config](https://console.aws.amazon.com/config/).
 
@@ -854,9 +937,9 @@ AWS Config can charge for recorded configuration items and rule evaluations; see
 
 ---
 
-## Phase 9 — Security controls
+## Phase 10 — Demonstrate Systems Manager and security controls
 
-### 9.1 Systems Manager Parameter Store
+### 10.1 Systems Manager Parameter Store
 
 Open [Systems Manager Parameter Store](https://console.aws.amazon.com/systems-manager/parameters/).
 
@@ -872,7 +955,7 @@ For credentials, use an appropriate secure parameter type or Secrets Manager. If
 
 Never put secrets into public frontend variables or commit them to GitHub.
 
-### 9.2 KMS
+### 10.2 KMS
 
 Open [AWS KMS](https://console.aws.amazon.com/kms/).
 
@@ -886,7 +969,7 @@ Open [AWS KMS](https://console.aws.amazon.com/kms/).
 
 Changing encryption for an existing database may require a snapshot-and-restore or migration procedure rather than a simple toggle. KMS keys and related operations can incur charges; avoid unnecessary keys.
 
-### 9.3 WAF
+### 10.3 WAF
 
 Because the architecture uses an Application Load Balancer, associate a regional WAF web ACL with it.
 
@@ -903,7 +986,7 @@ Initially monitor the effect of the rules before enabling restrictive blocking. 
 
 Demonstrate the web ACL, rules, sampled requests or metrics, and continued operation of legitimate student workflows. Do not perform attacks or load tests against public systems.
 
-### 9.4 Shield
+### 10.4 Shield
 
 Shield Standard is automatically included with AWS services it protects; you do not need Shield Advanced merely to explain basic DDoS protection. See [AWS Shield](https://docs.aws.amazon.com/shield/).
 
@@ -914,7 +997,7 @@ Explain:
 
 Do not enable Shield Advanced without reviewing its pricing and contractual requirements.
 
-### 9.5 Shared Responsibility Model
+### 10.5 Shared Responsibility Model
 
 **AWS is responsible for:**
 - Physical data-center security.
@@ -935,9 +1018,9 @@ Responsibilities differ between EC2, RDS, Aurora, and other managed services.
 
 ---
 
-## Phase 10 — Trusted Advisor and billing
+## Phase 11 — Review Trusted Advisor, billing, and cost information
 
-### 10.1 Trusted Advisor
+### 11.1 Trusted Advisor
 
 Open [AWS Trusted Advisor](https://console.aws.amazon.com/trustedadvisor/).
 
@@ -950,7 +1033,7 @@ Review checks available to your account for:
 
 Available checks depend on the account and support entitlements. Record each relevant recommendation, the resource concerned, why it matters, the suggested corrective action, and whether you applied it. You can demonstrate the service without applying every recommendation.
 
-### 10.2 Cost Explorer
+### 11.2 Cost Explorer
 
 Open [AWS Cost Explorer](https://console.aws.amazon.com/costmanagement/).
 
@@ -963,13 +1046,13 @@ Open [AWS Cost Explorer](https://console.aws.amazon.com/costmanagement/).
 
 Cost data may not appear immediately after resources are created. Review it throughout the project.
 
-### 10.3 Free Tier
+### 11.3 Free Tier
 
 In Billing, inspect the Free Tier/usage information available to your account. Record eligible services, usage allowances, current usage, approaching limits, and credit expiration dates.
 
 Free Tier offerings vary by account plan and service. See [AWS Free Tier tracking](https://docs.aws.amazon.com/us_en/awsaccountbilling/latest/aboutv2/tracking-free-tier-usage.html).
 
-### 10.4 Verify budget alerts
+### 11.4 Verify budget alerts
 
 Return to AWS Budgets and check:
 - Monthly budget exists.
@@ -982,62 +1065,20 @@ Do not deliberately exceed the budget to demonstrate it. Show the configured thr
 
 ---
 
-## Phase 11 — Push your changes to GitHub
+## Phase 12 — Prepare the final demonstration
 
-When the application changes work locally and deployment configuration has been tested, commit to your fork:
-
-```bash
-cd ~/Documents/aws-projects/EduTrack
-
-git status
-git diff --stat
-```
-
-Before committing, ensure you are not including:
-- Database passwords.
-- AWS access keys.
-- Production `.env` files.
-- OAuth client secrets.
-- Private certificates.
-- SSH private keys.
-
-Update `.gitignore` as appropriate, then:
-
-```bash
-git add .
-git commit -m "Adapt EduTrack for AWS deployment"
-git push -u origin aws-deployment
-```
-
-This pushes the branch to your own GitHub fork. Pushing source code to GitHub does **not** deploy it to AWS. The EC2 deployment is separate; source changes must be rebuilt and redeployed.
-
----
-
-## Phase 12 — Final demonstration checklist
-
-| No. | Demonstration | Evidence |
+| Step | Demonstration | Evidence |
 |---|---|---|
-| 1 | AWS environment setup | VPC, subnets, security groups, EC2 |
-| 2 | Student registration | Student record in app and RDS |
-| 3 | Student retrieval | Retrieved student details |
-| 4 | Student update | Updated record in RDS |
-| 5 | DynamoDB integration | Activity record in DynamoDB |
-| 6 | DynamoDB Streams | Stream configuration and captured changes |
-| 7 | Downstream processing | Lambda invocation and CloudWatch Logs |
-| 8 | RDS Multi-AZ | Deployment configuration and, if practical, controlled failover |
-| 9 | RDS Read Replica | Replica status and replication demonstration |
-| 10 | Aurora | Aurora configuration and comparison with standard RDS |
-| 11 | CloudWatch | Metrics, application logs, and alarm |
-| 12 | CloudTrail | Management events |
-| 13 | AWS Config | Configuration history and compliance evaluation |
-| 14 | Systems Manager | Session Manager and Parameter Store |
-| 15 | KMS | Key configuration and use by a supported resource |
-| 16 | WAF | Web ACL, rules, and request metrics |
-| 17 | Shield | Explanation of applicable DDoS protection |
-| 18 | Trusted Advisor | Available recommendations |
-| 19 | Billing | Cost Explorer and Free Tier information |
-| 20 | AWS Budgets | Monthly budget and alert thresholds |
-| 21 | Security | IAM permissions, MFA, private DB access, protected credentials |
+| 1 | AWS environment and database resources | Region, VPC, subnets, security groups, baseline RDS and DynamoDB table |
+| 2 | Sample data insertion | Student record in RDS and activity item in DynamoDB |
+| 3 | Student CRUD | Registration/insertion, retrieval, update, and confirmation that the updated values persisted |
+| 4 | DynamoDB Streams | Stream view after an item change, Lambda invocation, and CloudWatch log output |
+| 5 | Availability and scaling | RDS Multi-AZ configuration/failover explanation, read replica behavior, and Aurora comparison |
+| 6 | Monitoring and audit | CloudWatch metrics/logs/alarm, CloudTrail API event, and AWS Config history/compliance |
+| 7 | Operations and security | Session Manager, IAM least privilege/MFA, KMS, WAF, Shield explanation, and shared responsibilities |
+| 8 | Trusted Advisor and cost review | Recommendations available to the account, Cost Explorer, Free Tier/account billing details |
+| 9 | Budget | Monthly amount, actual/forecast alert thresholds, and notification configuration |
+| 10 | Architecture and cleanup summary | Architecture diagram, database choices, security controls, cost plan, and resources to stop/delete |
 
 ## Recommended initial architecture
 
@@ -1061,6 +1102,4 @@ This preserves the existing application where practical while adding the AWS fun
 
 ## What to do first
 
-Complete **Phase 1** first: fork EduTrack, inspect its configuration, and run the original application locally.
-
-Because this is someone else's project, do not immediately replace database configurations or deploy the whole stack to EC2. First inspect the actual source files and determine the exact changes required for RDS and DynamoDB. This avoids guessing at configuration filenames, API routes, and database models.
+Start with **Phase 2**: select the Region, review account billing and credits, create a monthly budget with alerts, and confirm your IAM/MFA setup. Prepare the repository in Phase 1 when you are ready to inspect or change the application. Then follow the **Expected end-to-end workflow** above. Inspect the code and configuration as you prepare the AWS integration, but you do not need to get the complete application running locally before provisioning AWS resources.

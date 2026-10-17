@@ -11,9 +11,6 @@ services:
       - MONGODB_LOCAL_URI=mongodb://mongo:27017/Edu-Track
       - KAFKA_CONSUMER_GROUP_ID=edu-track-node-consumer
       - KAFKA_BROKER=kafka:9092
-    volumes:
-      - .:/app
-
   mongo:
     image: mongo:7.0
     container_name: edu-track-mongo
@@ -33,4 +30,3 @@ services:
 
 volumes:
   mongo-data:
-

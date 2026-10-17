@@ -49,8 +49,8 @@ fastify.post("/api/grades/seed/:count", async (request, reply) => {
 const port = process.env.PORT || 3000;
 const start = async () => {
   try {
-    // Connect to MongoDB
-    connectDB();
+    // Wait until MongoDB is available before accepting API requests.
+    await connectDB();
     const host = await fastify.listen({ port, host: "0.0.0.0" });
     console.log(`Server is running at ${host}`);
     // Consumers
