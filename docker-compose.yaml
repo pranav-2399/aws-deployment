@@ -3,6 +3,9 @@ services:
     extends:
       file: ./backend-spring-boot/docker-compose.yaml
       service: app
+    build:
+      context: ./backend-spring-boot
+      dockerfile: Dockerfile
     depends_on:
       mysqldb:
         condition: service_healthy
