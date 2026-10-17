@@ -72,6 +72,12 @@ services:
       service: kong-database
     networks:
       - edu-track-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kong -d kong"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   kong-migrations:
     extends:
@@ -79,7 +85,7 @@ services:
       service: kong-migrations
     depends_on:
       kong-database:
-        condition: service_started
+        condition: service_healthy
     networks:
       - edu-track-network
 
@@ -88,7 +94,7 @@ services:
       file: ./middleware/docker-compose.yaml
       service: kong-gateway
     depends_on:
-      kong-database:
+      kong-migrations:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy

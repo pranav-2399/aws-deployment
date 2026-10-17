@@ -15,7 +15,7 @@ services:
       - .:/app
 
   mongo:
-    image: mongo:8.0
+    image: mongo:7.0
     container_name: edu-track-mongo
     ports:
       - "27017:27017"
@@ -33,5 +33,4 @@ services:
 
 volumes:
   mongo-data:
-
 
