@@ -15,17 +15,21 @@ services:
       - .:/app
 
   mongo:
-    image: mongo
+    image: mongo:8.0
     container_name: edu-track-mongo
     ports:
       - "27017:27017"
     volumes:
       - mongo-data:/data/db
     healthcheck:
-      test: echo 'db.stats().ok' | mongo mongo:27017/Edu-Track --quiet
-      interval: 30s
+      test: [
+          "CMD-SHELL",
+          "mongosh --quiet mongodb://localhost:27017/Edu-Track --eval 'db.runCommand({ ping: 1 }).ok' | grep -q 1"
+        ]
+      interval: 10s
       timeout: 10s
-      retries: 5  
+      retries: 5
+      start_period: 20s
 
 volumes:
   mongo-data:
