@@ -6,8 +6,6 @@ services:
       POSTGRES_USER: kong
       POSTGRES_DB: kong
       POSTGRES_PASSWORD: kongpass
-    ports:
-      - "5432:5432"
     volumes:
       - kong-db-data:/var/lib/postgresql/data
 
