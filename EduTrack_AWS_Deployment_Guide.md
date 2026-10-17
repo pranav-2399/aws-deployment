@@ -206,7 +206,7 @@ cat package.json
 If the frontend uses standard npm scripts:
 
 ```bash
-npm install
+pnpm install
 npm run dev
 ```
 
