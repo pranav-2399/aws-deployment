@@ -24,7 +24,14 @@ async function audit(studentId, action, details = {}) {
 }
 app.get('/api/health', async (_req, res) => {
   let sql = 'not-configured';
-  try { if (writer) { await writer.query('SELECT 1'); sql = 'ok'; } } catch { sql = 'error'; }
+  try { 
+    if (writer) { 
+      await writer.query('SELECT 1'); sql = 'ok'; 
+    } 
+  } catch (e) { 
+    console.error("Health checkup failed: " e.message)
+    sql = 'error'; 
+  }
   res.json({app: 'ok', sql, dynamodb: table, region});
 });
 app.get('/api/students', async (_req, res) => {
