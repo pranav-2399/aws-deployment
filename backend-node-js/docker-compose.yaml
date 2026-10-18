@@ -9,6 +9,8 @@ services:
       - PORT=3001
       - MONGODB_DB_NAME=Edu-Track
       - MONGODB_LOCAL_URI=mongodb://mongo:27017/Edu-Track
+      - AWS_REGION=${AWS_REGION:-ap-south-1}
+      - DYNAMODB_TABLE=${DYNAMODB_TABLE:-EduTrackStudentActivity}
       - KAFKA_CONSUMER_GROUP_ID=edu-track-node-consumer
       - KAFKA_BROKER=kafka:9092
   mongo:

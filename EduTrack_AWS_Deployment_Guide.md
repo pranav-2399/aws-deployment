@@ -407,30 +407,34 @@ This is only an example. Do not add `https://` or a port to the endpoint field.
 
 ### 4.3 Connect Spring Boot to RDS
 
-Inspect the actual configuration files:
+The repository now reads its Spring datasource settings from the **root `.env` file**. It is at the same level as the root `docker-compose.yaml`; it is not `frontend/.env` or `backend-node-js/.env`.
 
 ```bash
-cd ~/Documents/aws-projects/EduTrack
-
-find backend-spring-boot -type f \
-  \( -name 'application.properties' \
-  -o -name 'application.yml' \
-  -o -name 'application.yaml' \
-  -o -name 'pom.xml' \) \
-  -print
+chmod 600 .env
+nano .env
 ```
 
-Find the current JDBC URL, username, password, and schema settings. The configuration may need to resemble:
+If `.env` does not exist in a fresh checkout, first run `cp .env.example .env`.
 
-```properties
-spring.datasource.url=jdbc:mysql://${DB_HOST}:3306/edutrack
-spring.datasource.username=${DB_USERNAME}
-spring.datasource.password=${DB_PASSWORD}
+Enter your RDS values in these root `.env` keys:
+
+```dotenv
+MYSQL_HOST=your-rds-endpoint-hostname
+MYSQL_PORT=3306
+MYSQL_DATABASE=edu-track
+MYSQL_USERNAME=your-rds-application-username
+MYSQL_PASSWORD=your-rds-application-password
 ```
 
-This is an example, not a guaranteed drop-in replacement. Preserve any required JDBC options and match the repository's actual environment-variable conventions.
+`MYSQL_HOST` is only the RDS endpoint hostname, without `https://` or `:3306`. `MYSQL_DATABASE` must be a database that already exists on the RDS instance. The Compose file builds `jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}` and supplies the username/password as Spring datasource environment variables.
 
-Store credentials in Secrets Manager or Systems Manager Parameter Store. Never commit real passwords to GitHub.
+The root `.gitignore` excludes `.env` and `.env.*`; verify with `git check-ignore -v .env` before entering real credentials. Commit `.env.example`, never `.env`. If a password includes `#` or `$`, quote it using Compose dotenv syntax and verify the value carefully. For a deployed EC2 instance, use Secrets Manager or Parameter Store and grant the EC2 role access to the specific secret; do not put production credentials in Git.
+
+The datasource currently defaults to `edu-track`; check the **Initial database name** from Phase 4.2. If you chose a different name, put that exact name in `MYSQL_DATABASE`. RDS creates the database only if you supplied its name during instance creation. If the database is absent, connect from a host in the VPC and create it before starting Spring.
+
+For a quick classroom demo, a database user can be created with privileges scoped to `edu-track`. Avoid using the RDS master user for a long-running application. Hibernate is currently set to `ddl-auto=update`, so it needs table/schema creation or alteration privileges; use controlled migrations and narrower runtime permissions for a production deployment.
+
+RDS is private in this walkthrough. A laptop outside the VPC cannot use this `.env` and connect directly; run the application from EC2 in the VPC, or use a secured temporary access path. Do not make RDS public just to test the connection.
 
 If Hibernate creates the schema automatically, verify its behavior before relying on it in production. Controlled schema migrations are preferable for a long-lived application.
 
@@ -531,48 +535,30 @@ cd ~/Documents/aws-projects/EduTrack/backend-node-js
 npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb
 ```
 
-Example module:
+The backend package is configured with `"type": "module"`, so use ES module syntax (`import`/`export`):
 
 ```javascript
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 
-const {
-  DynamoDBDocumentClient,
-  PutCommand,
-  GetCommand
-} = require("@aws-sdk/lib-dynamodb");
-
-const client = new DynamoDBClient({
-  region: process.env.AWS_REGION
-});
-
+const client = new DynamoDBClient({ region: process.env.AWS_REGION || "ap-south-1" });
 const dynamodb = DynamoDBDocumentClient.from(client);
 const TABLE_NAME = process.env.DYNAMODB_TABLE;
 
-async function saveActivity(item) {
-  await dynamodb.send(
-    new PutCommand({
-      TableName: TABLE_NAME,
-      Item: item
-    })
-  );
+export async function saveActivity(item) {
+  await dynamodb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
 }
 
-async function getActivity(studentId, activityId) {
-  const result = await dynamodb.send(
-    new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { studentId, activityId }
-    })
-  );
-
+export async function getActivity(studentId, activityId) {
+  const result = await dynamodb.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { studentId, activityId },
+  }));
   return result.Item;
 }
-
-module.exports = { saveActivity, getActivity };
 ```
 
-This assumes the table has `studentId` as its partition key and `activityId` as its sort key. Adapt the code to the project's actual module system and coding style.
+Save this as an ES module, for example `backend-node-js/src/db/dynamodb.js`. It assumes the table has `studentId` as its partition key and `activityId` as its sort key. Add Fastify routes that call `saveActivity` and `getActivity`; installing the SDK alone does not integrate the feature.
 
 Set configuration values such as:
 
@@ -674,7 +660,7 @@ Open [Amazon EC2](https://console.aws.amazon.com/ec2/) in `ap-south-1`, then cho
 4. Under **Key pair (login)**, choose **Proceed without a key pair** because the plan uses Session Manager. Create/download a key pair only if you have a documented recovery need and can store the private key securely.
 5. Expand **Network settings → Edit**. Set **VPC** to `edutrack-vpc`, **Subnet** to `edutrack-public-a`, **Auto-assign public IP** to **Enable**, and **Firewall (security groups)** to **Select existing security group**. Select only `edutrack-app-sg`.
 6. Under **Configure storage**, keep the AMI root volume or set it to `30` GiB General Purpose SSD if the console allows it and the cost is acceptable. Docker images/logs consume disk space.
-7. Expand **Advanced details**. For **IAM instance profile**, select the EC2 role created in 7.2. Leave user data blank for this manual walkthrough.
+7. Expand **Advanced details**. For **IAM instance profile**, select the EC2 role created in 7.2. Set **Metadata accessible** to **Enabled**, **Metadata version** to **V2 only (token required)**, and **Metadata response hop limit** to `2` so the Dockerized AWS SDK can obtain the instance-role credentials. Leave user data blank for this manual walkthrough.
 8. Review the summary and select **Launch instance**. Open the instance details and wait for **Instance state: Running** and both status checks to pass.
 
 This demo places EC2 in a public subnet to avoid a NAT Gateway charge. Its security group still blocks direct web traffic; only the ALB security group can reach the application port. Do not add an SSH inbound rule. Multiple containers need memory, so a smaller instance may need services disabled or a larger paid instance.
@@ -741,11 +727,13 @@ Do not blindly copy a local `.env` file to EC2; it may contain localhost URLs, d
 From the repository root:
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=200
 ```
+
+`docker compose config` without `--quiet` can print resolved environment values, including credentials. Do not paste that output into chat or commit it.
 
 These commands start services defined in the Compose files. The frontend is not defined in the root Compose file. Complete the frontend deployment decision in Phase 1 before this step: either build and run it as a production container on EC2, or deploy it separately and configure its backend URLs and public URL. Route the browser-facing entry point through the load balancer; keep database ports private.
 
