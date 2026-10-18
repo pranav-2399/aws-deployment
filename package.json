@@ -1,0 +1,9 @@
+{
+  "name": "aws-student-management-lab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"start":"node app/server.js", "dev":"node --watch app/server.js"},
+  "engines": {"node": ">=20"},
+  "dependencies": {"@aws-sdk/client-dynamodb":"^3.900.0", "@aws-sdk/lib-dynamodb":"^3.900.0", "express":"^5.1.0", "mysql2":"^3.14.0"}
+}
