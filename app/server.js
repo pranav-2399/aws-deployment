@@ -29,7 +29,7 @@ app.get('/api/health', async (_req, res) => {
       await writer.query('SELECT 1'); sql = 'ok'; 
     } 
   } catch (e) { 
-    console.error("Health checkup failed: " e.message)
+    console.error("Health checkup failed: ", e.message)
     sql = 'error'; 
   }
   res.json({app: 'ok', sql, dynamodb: table, region});
